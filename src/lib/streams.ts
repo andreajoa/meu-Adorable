@@ -1,15 +1,25 @@
 "use server";
 import { StreamTextResult, UIMessage } from "ai";
-import { after } from "next/server";
-import { createResumableStreamContext } from "resumable-stream";
 import { redis, redisPublisher } from "./redis";
 
-const streamContext = createResumableStreamContext({
-  waitUntil: after,
-});
+// Store ativo de streams em memória (para ambiente serverless)
+const activeStreams = new Map<string, {
+  controller: ReadableStreamDefaultController<string>;
+  stream: ReadableStream<string>;
+  abortController: AbortController;
+}>();
 
 export async function stopStream(appId: string) {
   try {
+    // Cancela stream local se existir
+    const activeStream = activeStreams.get(appId);
+    if (activeStream) {
+      activeStream.abortController.abort();
+      activeStream.controller.close();
+      activeStreams.delete(appId);
+    }
+
+    // Publica evento de abort via Redis
     await redisPublisher.publish(
       "events:" + appId,
       JSON.stringify({
@@ -23,15 +33,15 @@ export async function stopStream(appId: string) {
 
 export async function getStream(appId: string) {
   try {
-    if (await streamContext.hasExistingStream(appId)) {
+    // Verifica se existe stream ativo na memória
+    const activeStream = activeStreams.get(appId);
+    if (activeStream) {
       return {
         async readableStream() {
-          const stream = await streamContext.resumeExistingStream(appId);
-          return stream;
+          return activeStream.stream;
         },
         async response() {
-          const resumableStream = await streamContext.resumeExistingStream(appId);
-          return new Response(resumableStream, {
+          return new Response(activeStream.stream, {
             headers: {
               "content-type": "text/event-stream",
               "cache-control": "no-cache",
@@ -43,6 +53,15 @@ export async function getStream(appId: string) {
         },
       };
     }
+
+    // Verifica se existe estado persistido no Redis
+    const streamState = await redisPublisher.get(`app:${appId}:stream-state`);
+    if (streamState) {
+      console.log(`Found persisted stream state for ${appId}:`, streamState);
+      // Poderia implementar recuperação de estado aqui se necessário
+    }
+
+    return null;
   } catch (error) {
     console.error('Error getting stream:', error);
     return null;
@@ -66,29 +85,72 @@ export async function setStream(
 
     // Set stream state with error handling
     try {
-      await redisPublisher.set(`app:${appId}:stream-state`, "running", { EX: 15 });
+      await redisPublisher.set(`app:${appId}:stream-state`, "running", { EX: 30 });
     } catch (redisError) {
       console.warn('Redis set failed, continuing without state persistence:', redisError);
     }
 
-    const resumableStream = await streamContext.createNewResumableStream(
-      appId,
-      () => {
-        return responseBody.pipeThrough(
-          new TextDecoderStream()
-        ) as ReadableStream<string>;
+    // Cria AbortController para cancelamento
+    const abortController = new AbortController();
+    
+    // Cria ReadableStream customizado com controle de abort
+    const customStream = new ReadableStream<string>({
+      start(controller) {
+        // Armazena o controller para controle externo
+        activeStreams.set(appId, {
+          controller,
+          stream: customStream,
+          abortController
+        });
+
+        // Setup do callback de abort
+        setupAbortCallback(appId, () => {
+          console.log("Stream aborted via Redis for appId:", appId);
+          abortController.abort();
+          controller.close();
+          activeStreams.delete(appId);
+        });
+
+        // Processa o stream original
+        const reader = responseBody.pipeThrough(new TextDecoderStream()).getReader();
+        
+        const pump = async () => {
+          try {
+            while (!abortController.signal.aborted) {
+              const { done, value } = await reader.read();
+              
+              if (done) {
+                controller.close();
+                activeStreams.delete(appId);
+                // Limpa estado do Redis
+                await redisPublisher.del(`app:${appId}:stream-state`);
+                break;
+              }
+              
+              controller.enqueue(value);
+            }
+          } catch (error) {
+            if (!abortController.signal.aborted) {
+              console.error('Stream error:', error);
+              controller.error(error);
+            }
+            activeStreams.delete(appId);
+          }
+        };
+
+        pump();
+      },
+      
+      cancel() {
+        console.log("Stream cancelled for appId:", appId);
+        abortController.abort();
+        activeStreams.delete(appId);
       }
-    );
+    });
 
     return {
       response() {
-        // Setup abort callback with error handling
-        setupAbortCallback(appId, () => {
-          console.log("cancelling http stream");
-          resumableStream?.cancel();
-        });
-
-        return new Response(resumableStream, {
+        return new Response(customStream, {
           headers: {
             "content-type": "text/event-stream",
             "cache-control": "no-cache",
@@ -109,7 +171,7 @@ export async function setStream(
 // Função auxiliar para setup do callback com timeout
 async function setupAbortCallback(appId: string, callback: () => void) {
   try {
-    const unsubscribe = await redisPublisher.subscribe("events:" + appId, (event) => {
+    const unsubscribe = redisPublisher.subscribe("events:" + appId, (event) => {
       try {
         const data = JSON.parse(event);
         if (data.type === "abort-stream") {
@@ -122,10 +184,10 @@ async function setupAbortCallback(appId: string, callback: () => void) {
       }
     });
 
-    // Auto cleanup após 30 segundos para evitar memory leaks
+    // Auto cleanup após 60 segundos para evitar memory leaks
     setTimeout(() => {
       unsubscribe?.();
-    }, 30000);
+    }, 60000);
   } catch (error) {
     console.error('Error setting up abort callback:', error);
   }
@@ -134,4 +196,15 @@ async function setupAbortCallback(appId: string, callback: () => void) {
 // Função legacy para compatibilidade
 export async function getAbortCallback(appId: string, callback: () => void) {
   return setupAbortCallback(appId, callback);
+}
+
+// Função utilitária para limpar streams órfãos
+export function cleanupOrphanedStreams() {
+  const now = Date.now();
+  for (const [appId, streamData] of activeStreams.entries()) {
+    // Remove streams que estão ativos há mais de 5 minutos
+    if (streamData.abortController.signal.aborted) {
+      activeStreams.delete(appId);
+    }
+  }
 }
