@@ -78,9 +78,9 @@
     "typescript": "^5"
   },
   "overrides": {
-    "redis": "$$EMPTYSLOT$$",
+    "redis": "0.0.0",
     "@langchain/redis": {
-      "redis": "$$EMPTYSLOT$$"
+      "redis": "0.0.0"
     }
   }
 }
