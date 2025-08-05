@@ -1,0 +1,21 @@
+# on:
+#   push:
+#     branches:
+#       - main
+
+# env:
+#   FREESTYLE_API_KEY: ${{ secrets.FREESTYLE_API_KEY }}
+
+# jobs:
+#   deploy:
+#     name: Deploy
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v2
+#       - uses: actions/setup-node@v1
+#         with:
+#           node-version: "22"
+#       - run: |
+#           npx freestyle-sh deploy \
+#             --build \
+#             --domain=adorable.dev
