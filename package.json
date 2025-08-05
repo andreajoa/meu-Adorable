@@ -78,7 +78,9 @@
     "tsx": "^4.19.3",
     "typescript": "^5"
   },
-  "resolutions": {
-    "redis": "^4.7.0"
+  "overrides": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.487.0"
   }
 }
