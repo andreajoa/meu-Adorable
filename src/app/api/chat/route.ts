@@ -27,31 +27,47 @@ export async function POST(req: NextRequest) {
     return new Response("App not found", { status: 404 });
   }
 
-  const streamState = await redisPublisher.get(
-    "app:" + appId + ":stream-state"
-  );
+  // Verifica se há stream rodando
+  let streamState;
+  try {
+    streamState = await redisPublisher.get("app:" + appId + ":stream-state");
+  } catch (error) {
+    console.warn("Failed to get stream state from Redis:", error);
+    streamState = null;
+  }
 
   if (streamState === "running") {
     console.log("Stopping previous stream for appId:", appId);
-    stopStream(appId);
+    await stopStream(appId);
 
     // Wait until stream state is cleared
     const maxAttempts = 60;
     let attempts = 0;
     while (attempts < maxAttempts) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      const updatedState = await redisPublisher.get(
-        "app:" + appId + ":stream-state"
-      );
+      
+      let updatedState;
+      try {
+        updatedState = await redisPublisher.get("app:" + appId + ":stream-state");
+      } catch (error) {
+        console.warn("Failed to check stream state:", error);
+        break; // Se Redis falhar, assume que o stream parou
+      }
+      
       if (updatedState !== "running") {
         break;
       }
       attempts++;
     }
 
-    // If stream is still running after max attempts, return an error
+    // If stream is still running after max attempts, force cleanup
     if (attempts >= maxAttempts) {
-      await redisPublisher.del(`app:${appId}:stream-state`);
+      try {
+        await redisPublisher.del(`app:${appId}:stream-state`);
+      } catch (error) {
+        console.warn("Failed to delete stream state:", error);
+      }
+      
       return new Response(
         "Previous stream is still shutting down, please try again",
         { status: 429 }
@@ -90,30 +106,41 @@ export async function sendMessage(
 
   const toolsets = await mcp.getToolsets();
 
-  await (
-    await builderAgent.getMemory()
-  )?.saveMessages({
-    messages: [
-      {
-        content: {
-          parts: message.parts,
-          format: 3,
+  try {
+    await (
+      await builderAgent.getMemory()
+    )?.saveMessages({
+      messages: [
+        {
+          content: {
+            parts: message.parts,
+            format: 3,
+          },
+          role: "user",
+          createdAt: new Date(),
+          id: message.id,
+          threadId: appId,
+          type: "text",
+          resourceId: appId,
         },
-        role: "user",
-        createdAt: new Date(),
-        id: message.id,
-        threadId: appId,
-        type: "text",
-        resourceId: appId,
-      },
-    ],
-  });
+      ],
+    });
+  } catch (error) {
+    console.warn("Failed to save message to memory:", error);
+  }
 
   const controller = new AbortController();
   let shouldAbort = false;
-  await getAbortCallback(appId, () => {
-    shouldAbort = true;
-  });
+  
+  // Setup abort callback com error handling
+  try {
+    await getAbortCallback(appId, () => {
+      console.log("Abort signal received for appId:", appId);
+      shouldAbort = true;
+    });
+  } catch (error) {
+    console.warn("Failed to setup abort callback:", error);
+  }
 
   let lastKeepAlive = Date.now();
 
@@ -130,34 +157,73 @@ export async function sendMessage(
     maxOutputTokens: 64000,
     toolsets,
     async onChunk() {
+      // Keep alive com error handling
       if (Date.now() - lastKeepAlive > 5000) {
         lastKeepAlive = Date.now();
-        redisPublisher.set(`app:${appId}:stream-state`, "running", {
-          EX: 15,
-        });
+        try {
+          await redisPublisher.set(`app:${appId}:stream-state`, "running", {
+            EX: 30, // Aumentado para 30s para dar mais tempo
+          });
+        } catch (error) {
+          console.warn("Failed to update keep-alive:", error);
+        }
       }
     },
     async onStepFinish(step) {
       messageList.add(step.response.messages, "response");
 
       if (shouldAbort) {
-        await redisPublisher.del(`app:${appId}:stream-state`);
+        console.log("Aborting stream after step finish for appId:", appId);
+        
+        try {
+          await redisPublisher.del(`app:${appId}:stream-state`);
+        } catch (error) {
+          console.warn("Failed to delete stream state on abort:", error);
+        }
+        
         controller.abort("Aborted stream after step finish");
+        
         const messages = messageList.drainUnsavedMessages();
-        console.log(messages);
-        await builderAgent.getMemory()?.saveMessages({
-          messages,
-        });
+        console.log("Saving unsaved messages:", messages.length);
+        
+        try {
+          await builderAgent.getMemory()?.saveMessages({
+            messages,
+          });
+        } catch (error) {
+          console.warn("Failed to save messages on abort:", error);
+        }
       }
     },
     onError: async (error) => {
-      await mcp.disconnect();
-      await redisPublisher.del(`app:${appId}:stream-state`);
-      console.error("Error:", error);
+      console.error("Stream error for appId:", appId, error);
+      
+      try {
+        await mcp.disconnect();
+      } catch (disconnectError) {
+        console.warn("Failed to disconnect MCP:", disconnectError);
+      }
+      
+      try {
+        await redisPublisher.del(`app:${appId}:stream-state`);
+      } catch (redisError) {
+        console.warn("Failed to delete stream state on error:", redisError);
+      }
     },
     onFinish: async () => {
-      await redisPublisher.del(`app:${appId}:stream-state`);
-      await mcp.disconnect();
+      console.log("Stream finished for appId:", appId);
+      
+      try {
+        await redisPublisher.del(`app:${appId}:stream-state`);
+      } catch (error) {
+        console.warn("Failed to delete stream state on finish:", error);
+      }
+      
+      try {
+        await mcp.disconnect();
+      } catch (error) {
+        console.warn("Failed to disconnect MCP on finish:", error);
+      }
     },
     abortSignal: controller.signal,
   });
