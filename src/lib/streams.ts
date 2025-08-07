@@ -198,8 +198,8 @@ export async function getAbortCallback(appId: string, callback: () => void) {
   return setupAbortCallback(appId, callback);
 }
 
-// Função utilitária para limpar streams órfãos
-export function cleanupOrphanedStreams() {
+// Função utilitária para limpar streams órfãos - FIXED: Made async
+export async function cleanupOrphanedStreams() {
   const now = Date.now();
   for (const [appId, streamData] of activeStreams.entries()) {
     // Remove streams que estão ativos há mais de 5 minutos
