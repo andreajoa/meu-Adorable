@@ -1,5 +1,5 @@
 import { SYSTEM_MESSAGE } from "@/lib/system";
-import { anthropic } from "@ai-sdk/anthropic";
+import { groq } from "@ai-sdk/groq";
 import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import { Memory } from "@mastra/memory";
@@ -30,7 +30,7 @@ export const memory = new Memory({
 
 export const builderAgent = new Agent({
   name: "BuilderAgent",
-  model: anthropic("claude-3-7-sonnet-20250219"),
+  model: groq("llama-3.1-70b-versatile"), // Mudança principal: Anthropic → Groq
   instructions: SYSTEM_MESSAGE,
   memory,
   tools: {
