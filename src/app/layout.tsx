@@ -1,21 +1,11 @@
 import type { Metadata } from "next";
 import { StackProvider, StackTheme } from "@stackframe/stack";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { GeistSans, GeistMono } from "geist/font";
 import "./globals.css";
 import { stackServerApp } from "@/auth/stack-auth";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/utils";
-
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Adorable",
@@ -45,7 +35,7 @@ export default function RootLayout({
       </head> */}
       <body
         className={cn(
-          `${inter.variable} ${jetbrainsMono.variable} antialiased`
+          `${GeistSans.variable} ${GeistMono.variable} antialiased`
         )}
       >
         <ThemeProvider
