@@ -1,19 +1,19 @@
 import type { Metadata } from "next";
 import { StackProvider, StackTheme } from "@stackframe/stack";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { stackServerApp } from "@/auth/stack-auth";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/utils";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
 });
 
@@ -45,7 +45,7 @@ export default function RootLayout({
       </head> */}
       <body
         className={cn(
-          `${geistSans.variable} ${geistMono.variable} antialiased`
+          `${inter.variable} ${jetbrainsMono.variable} antialiased`
         )}
       >
         <ThemeProvider
@@ -56,7 +56,6 @@ export default function RootLayout({
           forcedTheme="light"
         >
           <Toaster />
-
           <StackProvider app={stackServerApp}>
             <StackTheme>{children}</StackTheme>
           </StackProvider>
