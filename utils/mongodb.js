@@ -3,7 +3,7 @@ import mongoose from 'mongoose'
 const MONGODB_URI = process.env.MONGODB_URI
 
 if (!MONGODB_URI) {
-  throw new Error('Please define the MONGODB_URI environment variable inside .env.local')
+  throw new Error('Please define the MONGODB_URI environment variable')
 }
 
 /**
@@ -25,20 +25,24 @@ async function connectDB() {
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-      // Additional options for better production performance
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 10000, // Increased from 5000
+      socketTimeoutMS: 75000, // Increased from 45000
+      connectTimeoutMS: 30000, // Added this
+      maxIdleTimeMS: 30000,
+      // Remove deprecated options
+      // useNewUrlParser: true,
+      // useUnifiedTopology: true,
     }
 
+    console.log('Attempting to connect to MongoDB...')
+    
     cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
-      console.log('Connected to MongoDB')
+      console.log('✅ Connected to MongoDB successfully')
       return mongoose
     }).catch((error) => {
-      console.error('MongoDB connection error:', error)
+      console.error('❌ MongoDB connection error:', error)
+      cached.promise = null // Reset on error
       throw error
     })
   }
@@ -47,6 +51,7 @@ async function connectDB() {
     cached.conn = await cached.promise
   } catch (e) {
     cached.promise = null
+    console.error('❌ Failed to establish MongoDB connection:', e)
     throw e
   }
 
