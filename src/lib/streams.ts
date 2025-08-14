@@ -93,8 +93,11 @@ export async function setStream(
     // Cria AbortController para cancelamento
     const abortController = new AbortController();
     
-    // Declare controller variable that will be set in start()
+    // Variable to hold the controller reference
     let streamController: ReadableStreamDefaultController<string>;
+    
+    // Variable to hold the stream reference (will be set after creation)
+    let customStreamRef: ReadableStream<string>;
     
     // Cria ReadableStream customizado com controle de abort
     const customStream = new ReadableStream<string>({
@@ -102,10 +105,13 @@ export async function setStream(
         // Store the controller reference
         streamController = controller;
         
-        // Armazena o controller para controle externo
+        // Now we can safely store the stream reference since it's being created
+        customStreamRef = customStream;
+        
+        // Armazena o controller para controle externo - FIXED: Use the stream reference
         activeStreams.set(appId, {
           controller,
-          stream: customStream,
+          stream: customStreamRef,
           abortController
         });
 
@@ -145,18 +151,38 @@ export async function setStream(
               controller.error(error);
             }
             activeStreams.delete(appId);
+          } finally {
+            // Always cleanup on exit
+            try {
+              await redisPublisher.del(`app:${appId}:stream-state`);
+            } catch (redisError) {
+              console.warn('Redis cleanup failed in finally block:', redisError);
+            }
           }
         };
 
-        pump();
+        // Start pumping data
+        pump().catch((error) => {
+          console.error('Pump error:', error);
+          if (!controller.desiredSize || controller.desiredSize <= 0) return;
+          controller.error(error);
+          activeStreams.delete(appId);
+        });
       },
       
       cancel() {
         console.log("Stream cancelled for appId:", appId);
         abortController.abort();
         activeStreams.delete(appId);
+        // Cleanup Redis state
+        redisPublisher.del(`app:${appId}:stream-state`).catch((error) => {
+          console.warn('Redis cleanup failed on cancel:', error);
+        });
       }
     });
+
+    // Update the reference after creation
+    customStreamRef = customStream;
 
     return {
       response() {
@@ -174,6 +200,13 @@ export async function setStream(
     };
   } catch (error) {
     console.error('Error setting stream:', error);
+    // Cleanup on error
+    activeStreams.delete(appId);
+    try {
+      await redisPublisher.del(`app:${appId}:stream-state`);
+    } catch (redisError) {
+      console.warn('Redis cleanup failed on error:', redisError);
+    }
     throw error;
   }
 }
@@ -208,13 +241,27 @@ export async function getAbortCallback(appId: string, callback: () => void) {
   return setupAbortCallback(appId, callback);
 }
 
-// Função utilitária para limpar streams órfãos - FIXED: Made async
+// Função utilitária para limpar streams órfãos
 export async function cleanupOrphanedStreams() {
   const now = Date.now();
+  const toDelete: string[] = [];
+  
   for (const [appId, streamData] of activeStreams.entries()) {
-    // Remove streams que estão ativos há mais de 5 minutos
+    // Remove streams que estão abortados
     if (streamData.abortController.signal.aborted) {
-      activeStreams.delete(appId);
+      toDelete.push(appId);
     }
   }
+  
+  // Cleanup identified streams
+  for (const appId of toDelete) {
+    activeStreams.delete(appId);
+    try {
+      await redisPublisher.del(`app:${appId}:stream-state`);
+    } catch (error) {
+      console.warn(`Failed to cleanup Redis state for ${appId}:`, error);
+    }
+  }
+  
+  console.log(`Cleaned up ${toDelete.length} orphaned streams`);
 }
