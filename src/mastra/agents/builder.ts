@@ -2,37 +2,15 @@ import { SYSTEM_MESSAGE } from "@/lib/system";
 import { groq } from "@ai-sdk/groq";
 import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
-import { Memory } from "@mastra/memory";
-import { PostgresStore, PgVector } from "@mastra/pg";
 import { z } from "zod";
 
-export const memory = new Memory({
-  options: {
-    lastMessages: 1000,
-    semanticRecall: false,
-    threads: {
-      generateTitle: true,
-    },
-  },
-  vector: new PgVector({
-    connectionString: process.env.DATABASE_URL!,
-  }),
-  storage: new PostgresStore({
-    connectionString: process.env.DATABASE_URL!,
-  }),
-  processors: [
-    // new ToolCallFilter({
-    //   exclude: ["read_file", "read_multiple_files"],
-    // }),
-    // new TokenLimiter(100_000),
-  ],
-});
+console.log('Mastra Agent: Initializing without memory (to avoid connection issues)');
 
 export const builderAgent = new Agent({
   name: "BuilderAgent",
-  model: groq("llama-3.1-70b-versatile"), // Mudança principal: Anthropic → Groq
+  model: groq("llama-3.1-70b-versatile"),
   instructions: SYSTEM_MESSAGE,
-  memory,
+  // memory, // Commented out to avoid connection issues
   tools: {
     update_todo_list: createTool({
       id: "update_todo_list",
@@ -52,3 +30,6 @@ export const builderAgent = new Agent({
     }),
   },
 });
+
+// Export empty memory for compatibility
+export const memory = null;
