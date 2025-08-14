@@ -93,9 +93,15 @@ export async function setStream(
     // Cria AbortController para cancelamento
     const abortController = new AbortController();
     
+    // Declare controller variable that will be set in start()
+    let streamController: ReadableStreamDefaultController<string>;
+    
     // Cria ReadableStream customizado com controle de abort
     const customStream = new ReadableStream<string>({
       start(controller) {
+        // Store the controller reference
+        streamController = controller;
+        
         // Armazena o controller para controle externo
         activeStreams.set(appId, {
           controller,
@@ -123,7 +129,11 @@ export async function setStream(
                 controller.close();
                 activeStreams.delete(appId);
                 // Limpa estado do Redis
-                await redisPublisher.del(`app:${appId}:stream-state`);
+                try {
+                  await redisPublisher.del(`app:${appId}:stream-state`);
+                } catch (redisError) {
+                  console.warn('Redis cleanup failed:', redisError);
+                }
                 break;
               }
               
